@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:convert';
 import 'models/message.dart';
 import 'package:http/http.dart' as http;
+import 'package:file_picker/file_picker.dart';
 
 class Chat {
   String title;
@@ -26,6 +28,7 @@ class Mainpage extends StatefulWidget {
 class _MainpageState extends State<Mainpage> {
   String displayText = '';
   bool isLoading = false;
+  int thinkDots = 0;
   TextEditingController taskController = TextEditingController();
   ScrollController scrollController = ScrollController();
   FocusNode inputFocusnode = FocusNode();
@@ -45,6 +48,72 @@ class _MainpageState extends State<Mainpage> {
     });
   }
 
+  void startThinking() {
+    Timer.periodic(const Duration(milliseconds: 300), (timer) {
+      if (!isLoading) {
+        timer.cancel();
+        return;
+      }
+      setState(() {
+        thinkDots = (thinkDots + 1) % 4;
+      });
+    });
+  }
+
+  Future<void> pickFile() async {
+    String prompt = taskController.text.trim();
+    FilePickerResult? result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      withData: true,
+    );
+    if (result != null) {
+      PlatformFile file = result.files.single;
+      print("Selected image :${file.name}");
+
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('http://127.0.0.1:8000/chat/upload-image'),
+      );
+      request.files.add(
+        http.MultipartFile.fromBytes('file', file.bytes!, filename: file.name),
+      );
+      request.fields['prompt'] = prompt;
+      setState(() {
+        isLoading = true;
+        thinkDots = 0;
+      });
+      startThinking();
+      try {
+        final response = await request.send();
+
+        final responsebody = await response.stream.bytesToString();
+        final data = jsonDecode(responsebody);
+        if (response.statusCode == 200) {
+          final reply = data['reply'];
+          setState(() {
+            tasklist.add(Message(text: prompt, isUser: true));
+            tasklist.add(Message(text: reply, isUser: false));
+
+            if (activeChatIndex == null) {
+              chathistory.add(
+                Chat(title: "Query about image", messages: List.from(tasklist)),
+              );
+              activeChatIndex = chathistory.length - 1;
+            } else {
+              chathistory[activeChatIndex!].messages = List.from(tasklist);
+            }
+          });
+          taskController.clear();
+          scrolltobottom();
+        }
+      } finally {
+        setState(() {
+          isLoading = false;
+        });
+      }
+    }
+  }
+
   Future<void> sendprompt() async {
     final prompt = taskController.text;
     if (prompt.isEmpty) {
@@ -54,6 +123,7 @@ class _MainpageState extends State<Mainpage> {
 
       return;
     }
+
     setState(() {
       tasklist.add(Message(text: prompt, isUser: true));
       if (activeChatIndex == null) {
@@ -68,8 +138,9 @@ class _MainpageState extends State<Mainpage> {
     scrolltobottom();
     setState(() {
       isLoading = true;
+      thinkDots = 0;
     });
-
+    startThinking();
     try {
       final response = await http.post(
         Uri.parse('http://127.0.0.1:8000/chat/'),
@@ -230,8 +301,8 @@ class _MainpageState extends State<Mainpage> {
                     child: Align(
                       alignment: Alignment.centerLeft,
                       child: Text(
-                        "Thinking...",
-                        style: TextStyle(fontSize: 15),
+                        "Thinking${"." * thinkDots}",
+                        style: TextStyle(fontSize: 15, color: Colors.white),
                       ),
                     ),
                   );
@@ -270,6 +341,10 @@ class _MainpageState extends State<Mainpage> {
 
             child: Row(
               children: [
+                IconButton(
+                  onPressed: pickFile,
+                  icon: const Icon(Icons.attach_file, color: Colors.white),
+                ),
                 Expanded(
                   child: KeyboardListener(
                     focusNode: keyboardFocusnode,
